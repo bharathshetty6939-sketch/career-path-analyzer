@@ -1,7 +1,12 @@
 import logging
 
-# Suppress Streamlit's harmless "missing ScriptRunContext" init-phase warning
-logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
+# Suppress the harmless "missing ScriptRunContext" warning that fires during
+# Streamlit's init phase. A content-based filter works across all Streamlit versions.
+class _NoScriptRunCtxWarning(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "missing ScriptRunContext" not in record.getMessage()
+
+logging.getLogger("streamlit").addFilter(_NoScriptRunCtxWarning())
 
 import streamlit as st
 import spacy
@@ -485,6 +490,12 @@ st.markdown("""
 
 
 # ─── Input Section ──────────────────────────────────────────────────────────────
+# Initialise session state buckets for uploaded-file text (survives reruns)
+if "resume_file_text" not in st.session_state:
+    st.session_state["resume_file_text"] = ""
+if "jd_file_text" not in st.session_state:
+    st.session_state["jd_file_text"] = ""
+
 col_resume, col_jd = st.columns(2, gap="large")
 
 with col_resume:
@@ -495,6 +506,8 @@ with col_resume:
     )
     resume_text = ""
     if input_mode_r == "Paste Text":
+        # Clear any cached file text when switching to paste mode
+        st.session_state["resume_file_text"] = ""
         resume_text = st.text_area(
             "Resume Text", height=320,
             placeholder="Paste your resume content here...\n\nInclude your skills, experience, education, and achievements.",
@@ -505,12 +518,23 @@ with col_resume:
             "Upload Resume", type=["pdf", "docx"], key="resume_file", label_visibility="collapsed"
         )
         if uploaded_resume:
-            if uploaded_resume.name.endswith(".pdf"):
-                resume_text = extract_pdf_text(uploaded_resume)
-            else:
-                resume_text = extract_docx_text(uploaded_resume)
+            # Extract text and cache it; keyed by filename so we re-extract on new uploads
+            cache_key = f"resume_{uploaded_resume.name}_{uploaded_resume.size}"
+            if st.session_state.get("resume_cache_key") != cache_key:
+                if uploaded_resume.name.endswith(".pdf"):
+                    extracted = extract_pdf_text(uploaded_resume)
+                else:
+                    extracted = extract_docx_text(uploaded_resume)
+                st.session_state["resume_file_text"] = extracted
+                st.session_state["resume_cache_key"] = cache_key
+            resume_text = st.session_state["resume_file_text"]
             if resume_text:
                 st.success(f"✅ Loaded: {uploaded_resume.name}")
+            else:
+                st.error("❌ Could not extract text. Try a text-based PDF or paste the content instead.")
+        else:
+            st.session_state["resume_file_text"] = ""
+            st.session_state.pop("resume_cache_key", None)
 
 with col_jd:
     st.markdown('<div class="section-header">💼 Job Description</div>', unsafe_allow_html=True)
@@ -520,6 +544,7 @@ with col_jd:
     )
     jd_text = ""
     if input_mode_j == "Paste Text":
+        st.session_state["jd_file_text"] = ""
         jd_text = st.text_area(
             "Job Description Text", height=320,
             placeholder="Paste the job description here...\n\nInclude requirements, responsibilities, and qualifications.",
@@ -530,12 +555,22 @@ with col_jd:
             "Upload JD", type=["pdf", "docx"], key="jd_file", label_visibility="collapsed"
         )
         if uploaded_jd:
-            if uploaded_jd.name.endswith(".pdf"):
-                jd_text = extract_pdf_text(uploaded_jd)
-            else:
-                jd_text = extract_docx_text(uploaded_jd)
+            cache_key = f"jd_{uploaded_jd.name}_{uploaded_jd.size}"
+            if st.session_state.get("jd_cache_key") != cache_key:
+                if uploaded_jd.name.endswith(".pdf"):
+                    extracted = extract_pdf_text(uploaded_jd)
+                else:
+                    extracted = extract_docx_text(uploaded_jd)
+                st.session_state["jd_file_text"] = extracted
+                st.session_state["jd_cache_key"] = cache_key
+            jd_text = st.session_state["jd_file_text"]
             if jd_text:
                 st.success(f"✅ Loaded: {uploaded_jd.name}")
+            else:
+                st.error("❌ Could not extract text. Try a text-based PDF or paste the content instead.")
+        else:
+            st.session_state["jd_file_text"] = ""
+            st.session_state.pop("jd_cache_key", None)
 
 
 # ─── Analyze Button ─────────────────────────────────────────────────────────────
