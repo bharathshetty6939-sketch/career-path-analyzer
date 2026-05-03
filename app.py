@@ -377,12 +377,49 @@ def score_label(score: float) -> str:
 
 
 def extract_pdf_text(uploaded_file) -> str:
+    raw_bytes = uploaded_file.read()
+
+    # ── Stage 1: PyPDF2 (fast path for text-based PDFs) ─────────────────────
     try:
         import PyPDF2
-        reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
-        return " ".join(page.extract_text() or "" for page in reader.pages)
+        reader = PyPDF2.PdfReader(io.BytesIO(raw_bytes))
+        text = " ".join(page.extract_text() or "" for page in reader.pages).strip()
+        if len(text) > 50:          # meaningful text found → done
+            return text
+    except Exception:
+        pass
+
+    # ── Stage 2: OCR fallback for scanned / image-based PDFs ────────────────
+    try:
+        import pytesseract
+        from pdf2image import convert_from_bytes
+
+        # Common Tesseract install paths on Windows
+        import os
+        tesseract_paths = [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ]
+        for p in tesseract_paths:
+            if os.path.exists(p):
+                pytesseract.pytesseract.tesseract_cmd = p
+                break
+
+        with st.spinner("🔍 Scanned PDF detected — running OCR (may take a few seconds)..."):
+            images = convert_from_bytes(raw_bytes, dpi=300)
+            ocr_text = " ".join(
+                pytesseract.image_to_string(img, lang="eng") for img in images
+            )
+        return ocr_text.strip()
+
+    except ImportError:
+        st.warning(
+            "📦 OCR packages not installed. Run: `pip install pytesseract pdf2image` "
+            "and install **Tesseract OCR** from https://github.com/UB-Mannheim/tesseract/wiki"
+        )
+        return ""
     except Exception as e:
-        st.warning(f"PDF read error: {e}. Try pasting text instead.")
+        st.warning(f"OCR failed: {e}. Try pasting the text instead.")
         return ""
 
 
@@ -531,7 +568,7 @@ with col_resume:
             if resume_text:
                 st.success(f"✅ Loaded: {uploaded_resume.name}")
             else:
-                st.error("❌ Could not extract text. Try a text-based PDF or paste the content instead.")
+                st.error("❌ Could not extract text. Ensure Tesseract OCR is installed for scanned PDFs, or paste the content instead.")
         else:
             st.session_state["resume_file_text"] = ""
             st.session_state.pop("resume_cache_key", None)
@@ -567,7 +604,7 @@ with col_jd:
             if jd_text:
                 st.success(f"✅ Loaded: {uploaded_jd.name}")
             else:
-                st.error("❌ Could not extract text. Try a text-based PDF or paste the content instead.")
+                st.error("❌ Could not extract text. Ensure Tesseract OCR is installed for scanned PDFs, or paste the content instead.")
         else:
             st.session_state["jd_file_text"] = ""
             st.session_state.pop("jd_cache_key", None)
