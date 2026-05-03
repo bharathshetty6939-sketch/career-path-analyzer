@@ -576,7 +576,7 @@ with col_resume:
 with col_jd:
     st.markdown('<div class="section-header">💼 Job Description</div>', unsafe_allow_html=True)
     input_mode_j = st.radio(
-        "Input mode", ["Paste Text", "Upload File (PDF/DOCX)"],
+        "Input mode", ["Paste Text", "Upload File (DOCX)"],
         horizontal=True, key="jd_mode", label_visibility="collapsed"
     )
     jd_text = ""
