@@ -376,60 +376,40 @@ def score_label(score: float) -> str:
     return "🔴 Low Match — Major Gaps Found"
 
 
-def extract_pdf_text(uploaded_file) -> str:
-    raw_bytes = uploaded_file.read()
-
-    # ── Stage 1: PyPDF2 (fast path for text-based PDFs) ─────────────────────
-    try:
-        import PyPDF2
-        reader = PyPDF2.PdfReader(io.BytesIO(raw_bytes))
-        text = " ".join(page.extract_text() or "" for page in reader.pages).strip()
-        if len(text) > 50:          # meaningful text found → done
-            return text
-    except Exception:
-        pass
-
-    # ── Stage 2: OCR fallback for scanned / image-based PDFs ────────────────
-    try:
-        import pytesseract
-        from pdf2image import convert_from_bytes
-
-        # Common Tesseract install paths on Windows
-        import os
-        tesseract_paths = [
-            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-        ]
-        for p in tesseract_paths:
-            if os.path.exists(p):
-                pytesseract.pytesseract.tesseract_cmd = p
-                break
-
-        with st.spinner("🔍 Scanned PDF detected — running OCR (may take a few seconds)..."):
-            images = convert_from_bytes(raw_bytes, dpi=300)
-            ocr_text = " ".join(
-                pytesseract.image_to_string(img, lang="eng") for img in images
-            )
-        return ocr_text.strip()
-
-    except ImportError:
-        st.warning(
-            "📦 OCR packages not installed. Run: `pip install pytesseract pdf2image` "
-            "and install **Tesseract OCR** from https://github.com/UB-Mannheim/tesseract/wiki"
-        )
-        return ""
-    except Exception as e:
-        st.warning(f"OCR failed: {e}. Try pasting the text instead.")
-        return ""
-
-
-def extract_docx_text(uploaded_file) -> str:
+def extract_docx_text(file_bytes: io.BytesIO) -> str:
+    """Extract text from DOCX files, including paragraphs and tables."""
     try:
         from docx import Document
-        doc = Document(io.BytesIO(uploaded_file.read()))
-        return " ".join(p.text for p in doc.paragraphs)
+        
+        # Seek to beginning to ensure we read from start
+        file_bytes.seek(0)
+        doc = Document(file_bytes)
+        
+        # Extract text from paragraphs
+        text_parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+        
+        # Also extract text from tables
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    cell_text = cell.text.strip()
+                    if cell_text:
+                        text_parts.append(cell_text)
+        
+        extracted_text = " ".join(text_parts)
+        
+        if extracted_text:
+            return extracted_text
+        else:
+            st.warning("⚠️ DOCX file appears to be empty. Please check the document or paste text instead.")
+            return ""
+            
+    except ImportError:
+        st.error("❌ python-docx library not installed. Run: `pip install python-docx`")
+        return ""
     except Exception as e:
-        st.warning(f"DOCX read error: {e}. Try pasting text instead.")
+        st.error(f"❌ Failed to read DOCX file: {str(e)}")
+        st.info("💡 Try pasting the text directly or ensure the file is a valid Word document.")
         return ""
 
 
@@ -538,7 +518,7 @@ col_resume, col_jd = st.columns(2, gap="large")
 with col_resume:
     st.markdown('<div class="section-header">📄 Your Resume</div>', unsafe_allow_html=True)
     input_mode_r = st.radio(
-        "Input mode", ["Paste Text", "Upload File (PDF/DOCX)"],
+        "Input mode", ["Paste Text", "Upload File (DOCX)"],
         horizontal=True, key="resume_mode", label_visibility="collapsed"
     )
     resume_text = ""
@@ -552,23 +532,22 @@ with col_resume:
         )
     else:
         uploaded_resume = st.file_uploader(
-            "Upload Resume", type=["pdf", "docx"], key="resume_file", label_visibility="collapsed"
+            "Upload Resume", type=["docx"], key="resume_file", label_visibility="collapsed"
         )
         if uploaded_resume:
             # Extract text and cache it; keyed by filename so we re-extract on new uploads
             cache_key = f"resume_{uploaded_resume.name}_{uploaded_resume.size}"
             if st.session_state.get("resume_cache_key") != cache_key:
-                if uploaded_resume.name.endswith(".pdf"):
-                    extracted = extract_pdf_text(uploaded_resume)
-                else:
-                    extracted = extract_docx_text(uploaded_resume)
+                # Read file bytes once and cache them
+                file_bytes = io.BytesIO(uploaded_resume.read())
+                extracted = extract_docx_text(file_bytes)
                 st.session_state["resume_file_text"] = extracted
                 st.session_state["resume_cache_key"] = cache_key
             resume_text = st.session_state["resume_file_text"]
             if resume_text:
                 st.success(f"✅ Loaded: {uploaded_resume.name}")
             else:
-                st.error("❌ Could not extract text. Ensure Tesseract OCR is installed for scanned PDFs, or paste the content instead.")
+                st.error("❌ Could not extract text from DOCX file. Please ensure it's a valid Word document or paste the content instead.")
         else:
             st.session_state["resume_file_text"] = ""
             st.session_state.pop("resume_cache_key", None)
@@ -589,22 +568,21 @@ with col_jd:
         )
     else:
         uploaded_jd = st.file_uploader(
-            "Upload JD", type=["pdf", "docx"], key="jd_file", label_visibility="collapsed"
+            "Upload JD", type=["docx"], key="jd_file", label_visibility="collapsed"
         )
         if uploaded_jd:
             cache_key = f"jd_{uploaded_jd.name}_{uploaded_jd.size}"
             if st.session_state.get("jd_cache_key") != cache_key:
-                if uploaded_jd.name.endswith(".pdf"):
-                    extracted = extract_pdf_text(uploaded_jd)
-                else:
-                    extracted = extract_docx_text(uploaded_jd)
+                # Read file bytes once and cache them
+                file_bytes = io.BytesIO(uploaded_jd.read())
+                extracted = extract_docx_text(file_bytes)
                 st.session_state["jd_file_text"] = extracted
                 st.session_state["jd_cache_key"] = cache_key
             jd_text = st.session_state["jd_file_text"]
             if jd_text:
                 st.success(f"✅ Loaded: {uploaded_jd.name}")
             else:
-                st.error("❌ Could not extract text. Ensure Tesseract OCR is installed for scanned PDFs, or paste the content instead.")
+                st.error("❌ Could not extract text from DOCX file. Please ensure it's a valid Word document or paste the content instead.")
         else:
             st.session_state["jd_file_text"] = ""
             st.session_state.pop("jd_cache_key", None)
